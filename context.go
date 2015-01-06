@@ -1,4 +1,4 @@
-package nosurf
+package csrf
 
 import (
 	"net/http"
@@ -93,4 +93,8 @@ func ctxClear(req *http.Request) {
 	defer cmMutex.Unlock()
 
 	delete(contextMap, req)
+}
+
+func ClearContext(req *http.Request) {
+	ctxClear(req)
 }

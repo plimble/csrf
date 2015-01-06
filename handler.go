@@ -1,6 +1,6 @@
 // Package nosurf implements an HTTP handler that
 // mitigates Cross-Site Request Forgery Attacks.
-package nosurf
+package csrf
 
 import (
 	"errors"
@@ -65,11 +65,11 @@ func defaultFailureHandler(w http.ResponseWriter, r *http.Request) {
 
 // Constructs a new CSRFHandler that calls
 // the specified handler if the CSRF check succeeds.
-func New(handler http.Handler) *CSRFHandler {
+func New() *CSRFHandler {
 	baseCookie := http.Cookie{}
 	baseCookie.MaxAge = MaxAge
 
-	csrf := &CSRFHandler{successHandler: handler,
+	csrf := &CSRFHandler{
 		failureHandler: http.HandlerFunc(defaultFailureHandler),
 		baseCookie:     baseCookie,
 	}
@@ -77,13 +77,7 @@ func New(handler http.Handler) *CSRFHandler {
 	return csrf
 }
 
-// The same as New(), but has an interface return type.
-func NewPure(handler http.Handler) http.Handler {
-	return New(handler)
-}
-
-func (h *CSRFHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	defer ctxClear(r)
+func (h *CSRFHandler) Check(w http.ResponseWriter, r *http.Request) bool {
 	w.Header().Add("Vary", "Cookie")
 
 	var realToken []byte
@@ -109,13 +103,11 @@ func (h *CSRFHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if sContains(safeMethods, r.Method) {
 		// short-circuit with a success for safe methods
-		h.handleSuccess(w, r)
-		return
+		return true
 	}
 
 	if h.IsExempt(r) {
-		h.handleSuccess(w, r)
-		return
+		return true
 	}
 
 	// if the request is secure, we enforce origin check
@@ -127,16 +119,14 @@ func (h *CSRFHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// we assume it's not specified
 		if err != nil || referer.String() == "" {
 			ctxSetReason(r, ErrNoReferer)
-			h.handleFailure(w, r)
-			return
+			return false
 		}
 
 		// if the referer doesn't share origin with the request URL,
 		// we have another error for that
 		if !sameOrigin(referer, r.URL) {
 			ctxSetReason(r, ErrBadReferer)
-			h.handleFailure(w, r)
-			return
+			return false
 		}
 	}
 
@@ -146,18 +136,17 @@ func (h *CSRFHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var sentToken []byte
 	sentToken = b64decode(r.Header.Get(HeaderName))
 	if len(sentToken) == 0 {
-		sentToken = b64decode(r.PostFormValue(FormFieldName))
+		sentToken = b64decode(r.FormValue(FormFieldName))
 	}
 
 	equals := verifyToken(realToken, sentToken)
 	if !equals {
 		ctxSetReason(r, ErrBadToken)
-		h.handleFailure(w, r)
-		return
+		return false
 	}
 
 	// Everything else passed, handle the success.
-	h.handleSuccess(w, r)
+	return true
 }
 
 // handleSuccess simply calls the successHandler.
